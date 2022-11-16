@@ -99,7 +99,7 @@ for await (const entry of read(blob)) {
   const readableStream = entry.stream()
 
   // returns a real web File Object, if the entry is uncompressed
-  // it will just slize the zip with it's start/end position
+  // it will just slice the zip with it's start/end position
   const file = await entry.file()
 }
 ```
