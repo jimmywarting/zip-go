@@ -56,7 +56,7 @@ myReadable
 if you would like to work it more manually you can do that as well.
 
 ```js
-import { Writer } from '@transcend-io/conflux';
+import Writer from 'zip-go/lib/write.js';
 
 // Set up conflux
 const { readable, writable } = new Writer();
