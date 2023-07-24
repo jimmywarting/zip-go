@@ -19,8 +19,7 @@ directory header also at the end of a zip file...
 - `WritableStream`
 - Reading compressed file entries requires [DecompressionStream](https://developer.mozilla.org/en-US/docs/Web/API/DecompressionStream#browser_compatibility)
 - Reading a zip file entries is done with `Blob`-like objects. NodeJS users can
-use [fetch-blob](https://github.com/node-fetch/fetch-blob/) until
-[nodejs/node#37340](https://github.com/nodejs/node/issues/37340) is resolved
+use [fs.openAsBlob](https://nodejs.org/dist/latest/docs/api/fs.html#fsopenasblobpath-options) or [fetch-blob](https://github.com/node-fetch/fetch-blob/)
 
 It can't as of yet write zip files larger than 4 GiB as it has no zip64 support
 but it can read those.
