@@ -35,7 +35,6 @@ const files = ['NYT.txt', 'water.png', 'Earth.jpg'].values()
 // Creates a regular ReadableStream that will pull file like objects
 const myReadable = new ReadableStream({
   async pull(controller) {
-
     const { done, value } = files.next()
     if (done) return controller.close()
     const { body } = await fetch(s3 + value)
@@ -44,33 +43,38 @@ const myReadable = new ReadableStream({
       name: `/${value}`,
       stream: () => body,
     })
-
-  },
+  }
 })
 
-myReadable
-  .pipeThrough(new Writer())
+const stream = myReadable
+  .pipeThrough(new ZipWriter())
+
+const blob = await new Response(stream).blob()
 ```
 
 if you would like to work it more manually you can do that as well.
 
 ```js
+import StreamSaver from 'streamsaver';
 import Writer from 'zip-go/lib/write.js';
 
-// Set up conflux
 const { readable, writable } = new Writer();
 const writer = writable.getWriter();
 
-// Set up streamsaver
-const fileStream = streamSaver.createWriteStream('conflux.zip');
+// Set up StreamSaver
+const fileStream = streamSaver.createWriteStream('archive.zip');
 
 // Add a WebIDL File like object that at least have name and a stream method
 // that returns a whatwg ReadableStream
 writer.write({
   name: '/cat.txt',
-  lastModified: new Date(123),
+  lastModified: +new Date(123),
   stream: () => new Response('mjau').body
 })
+
+writer.write(
+  new File(['woof'], 'dog.txt', { lastModified: +new Date(123)})
+)
 
 readable.pipeTo(destination)
 
