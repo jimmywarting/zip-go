@@ -88,7 +88,7 @@ to figure out all about each entry. Each `Entry` returns a WebIDL `File` like
 object with added properties that are more zip specific
 
 ```js
-import read from 'zip-go/lib/reader.js'
+import read from 'zip-go/lib/read.js'
 
 for await (const entry of read(blob)) {
   console.log(entry)
