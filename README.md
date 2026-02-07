@@ -21,8 +21,7 @@ directory header also at the end of a zip file...
 - Reading a zip file entries is done with `Blob`-like objects. NodeJS users can
 use [fs.openAsBlob](https://nodejs.org/dist/latest/docs/api/fs.html#fsopenasblobpath-options) or [fetch-blob](https://github.com/node-fetch/fetch-blob/)
 
-It can't as of yet write zip files larger than 4 GiB as it has no zip64 support
-but it can read those.
+Supports both reading and writing ZIP64 files larger than 4 GiB.
 
 ## Creating a ZIP
 
