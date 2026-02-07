@@ -1,5 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import { openAsBlob } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import read from '../lib/read.js'
 import Writer from '../lib/write.js'
@@ -22,6 +26,39 @@ const mix = (file, extraParams) => {
 
 function createZipBlob (files) {
   return new Response(ReadableStream.from(files).pipeThrough(new Writer())).blob()
+}
+
+/**
+ * Create a ZIP blob using filesystem as intermediate storage to reduce memory usage.
+ * Useful for large files where keeping the entire ZIP in memory could be problematic.
+ * 
+ * @param {Array} files - Array of file-like objects to zip
+ * @param {string} [dest] - Optional destination path. If not provided, uses a temp file.
+ * @returns {Promise<{blob: Blob, path: string, cleanup: Function}>} Object containing the blob, file path, and cleanup function
+ */
+async function createZipBlobFromFS (files, dest) {
+  const tempFile = dest || path.join(os.tmpdir(), `zip-go-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`)
+  
+  // Write the ZIP stream to a file
+  const stream = ReadableStream.from(files).pipeThrough(new Writer())
+  await fs.writeFile(tempFile, stream)
+  
+  // Open the file as a Blob
+  const blob = await openAsBlob(tempFile)
+  
+  // Return blob, path, and cleanup function
+  return {
+    blob,
+    path: tempFile,
+    cleanup: async () => {
+      try {
+        await fs.unlink(tempFile)
+      } catch (err) {
+        // Ignore errors if file doesn't exist
+        if (err.code !== 'ENOENT') throw err
+      }
+    }
+  }
 }
 
 async function readZipBlob (zipBlob) {
@@ -999,4 +1036,105 @@ test('should write ZIP64 structures when needed', async (t) => {
   
   // Verify that zip64 property exists and is false for small files
   assert.equal(entries[0].zip64, false, 'Small files should not be marked as ZIP64')
+})
+
+// Test filesystem-based ZIP creation
+test('should create ZIP using filesystem to reduce memory usage', async (t) => {
+  const files = [
+    new File(['Hello, World!'], 'test.txt'),
+    new File(['Another file'], 'test2.txt')
+  ]
+  
+  const result = await createZipBlobFromFS(files)
+  
+  try {
+    // Verify the blob was created
+    assert.ok(result.blob, 'Blob should be created')
+    assert.ok(result.blob.size > 0, 'Blob should have content')
+    assert.ok(result.path, 'Path should be provided')
+    assert.ok(typeof result.cleanup === 'function', 'Cleanup function should be provided')
+    
+    // Verify the ZIP can be read
+    const entries = await readZipBlob(result.blob)
+    assert.equal(entries.length, 2, 'Should have two entries')
+    assert.equal(entries[0].name, 'test.txt', 'First entry name should match')
+    assert.equal(entries[1].name, 'test2.txt', 'Second entry name should match')
+    assert.equal(await entries[0].text(), 'Hello, World!', 'First file content should match')
+    assert.equal(await entries[1].text(), 'Another file', 'Second file content should match')
+  } finally {
+    // Clean up the temp file
+    await result.cleanup()
+  }
+})
+
+// Test filesystem-based ZIP creation with custom destination
+test('should create ZIP at custom destination path', async (t) => {
+  const customPath = path.join(os.tmpdir(), 'custom-test.zip')
+  const files = [new File(['Custom path test'], 'custom.txt')]
+  
+  const result = await createZipBlobFromFS(files, customPath)
+  
+  try {
+    assert.equal(result.path, customPath, 'Path should match custom path')
+    
+    // Verify file exists at the custom path
+    const stat = await fs.stat(customPath)
+    assert.ok(stat.size > 0, 'File should exist at custom path')
+    
+    // Verify content
+    const entries = await readZipBlob(result.blob)
+    assert.equal(entries.length, 1, 'Should have one entry')
+    assert.equal(await entries[0].text(), 'Custom path test', 'Content should match')
+  } finally {
+    await result.cleanup()
+  }
+})
+
+// Test that filesystem-based creation produces same result as in-memory
+test('filesystem-based creation should produce equivalent result to in-memory', async (t) => {
+  const files = [
+    new File(['Test content 1'], 'file1.txt'),
+    new File(['Test content 2'], 'file2.txt')
+  ]
+  
+  // Create using in-memory method
+  const memoryBlob = await createZipBlob(files)
+  const memoryEntries = await readZipBlob(memoryBlob)
+  
+  // Create using filesystem method
+  const fsResult = await createZipBlobFromFS(files)
+  
+  try {
+    const fsEntries = await readZipBlob(fsResult.blob)
+    
+    // Compare results
+    assert.equal(fsEntries.length, memoryEntries.length, 'Entry count should match')
+    
+    for (let i = 0; i < fsEntries.length; i++) {
+      assert.equal(fsEntries[i].name, memoryEntries[i].name, `Entry ${i} name should match`)
+      assert.equal(await fsEntries[i].text(), await memoryEntries[i].text(), `Entry ${i} content should match`)
+    }
+  } finally {
+    await fsResult.cleanup()
+  }
+})
+
+// Test filesystem-based creation with large file
+test('filesystem-based creation should handle large files efficiently', async (t) => {
+  // Use a 10MB virtual file to test (not too large to slow down tests, but enough to show benefit)
+  const largeFile = new VirtualLoremIpsumFile(10 * 1024 * 1024, 'large-file.txt')
+  
+  const result = await createZipBlobFromFS([largeFile])
+  
+  try {
+    assert.ok(result.blob.size > 10 * 1024 * 1024, 'ZIP should be larger than 10MB')
+    
+    // Verify it can be read
+    const entries = await readZipBlob(result.blob)
+    assert.equal(entries.length, 1, 'Should have one entry')
+    assert.equal(entries[0].name, 'large-file.txt', 'Entry name should match')
+    assert.equal(entries[0].size, 10 * 1024 * 1024, 'Entry size should match')
+  } finally {
+    await result.cleanup()
+  }
 })
