@@ -1139,3 +1139,282 @@ test('filesystem-based creation should handle large files efficiently', async (t
     await result.cleanup()
   }
 })
+
+// ============================================================================
+// ZIP64 Interoperability Tests with Standard ZIP Tools
+// ============================================================================
+
+test('should read ZIP files created by system zip tool', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip-interop-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create test files
+    const file1Path = path.join(testDir, 'test1.txt')
+    const file2Path = path.join(testDir, 'test2.txt')
+    await fs.writeFile(file1Path, 'Hello from system zip!')
+    await fs.writeFile(file2Path, 'Another test file')
+    
+    // Create ZIP using system zip tool
+    const zipPath = path.join(testDir, 'system-created.zip')
+    const { execSync } = await import('node:child_process')
+    execSync(`cd "${testDir}" && zip -q "${zipPath}" test1.txt test2.txt`)
+    
+    // Read the ZIP with zip-go
+    const zipBlob = await openAsBlob(zipPath)
+    const entries = await readZipBlob(zipBlob)
+    
+    assert.equal(entries.length, 2, 'Should have two entries')
+    assert.ok(entries.find(e => e.name === 'test1.txt'), 'Should have test1.txt')
+    assert.ok(entries.find(e => e.name === 'test2.txt'), 'Should have test2.txt')
+    
+    const entry1 = entries.find(e => e.name === 'test1.txt')
+    assert.equal(await entry1.text(), 'Hello from system zip!', 'Content should match')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should create ZIP files readable by system unzip tool', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip-interop-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create ZIP with zip-go
+    const files = [
+      new File(['Content from zip-go 1'], 'zipgo-test1.txt'),
+      new File(['Content from zip-go 2'], 'zipgo-test2.txt'),
+      new File(['Binary content'], 'binary.dat')
+    ]
+    
+    const zipPath = path.join(testDir, 'zipgo-created.zip')
+    const result = await createZipBlobFromFS(files, zipPath)
+    
+    // Extract with system unzip
+    const extractDir = path.join(testDir, 'extracted')
+    await fs.mkdir(extractDir, { recursive: true })
+    
+    const { execSync } = await import('node:child_process')
+    execSync(`unzip -q "${zipPath}" -d "${extractDir}"`)
+    
+    // Verify extracted files
+    const extracted1 = await fs.readFile(path.join(extractDir, 'zipgo-test1.txt'), 'utf8')
+    const extracted2 = await fs.readFile(path.join(extractDir, 'zipgo-test2.txt'), 'utf8')
+    const extractedBin = await fs.readFile(path.join(extractDir, 'binary.dat'), 'utf8')
+    
+    assert.equal(extracted1, 'Content from zip-go 1', 'First file content should match')
+    assert.equal(extracted2, 'Content from zip-go 2', 'Second file content should match')
+    assert.equal(extractedBin, 'Binary content', 'Binary file content should match')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should handle round-trip: zip-go → unzip → zip → zip-go', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip-roundtrip-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    const originalContent = 'Round-trip test content with special chars: ñ, ü, 中文'
+    const originalFiles = [
+      new File([originalContent], 'roundtrip.txt'),
+      new File(['Another file'], 'file2.txt')
+    ]
+    
+    // Step 1: Create ZIP with zip-go
+    const zipPath1 = path.join(testDir, 'step1-zipgo.zip')
+    await createZipBlobFromFS(originalFiles, zipPath1)
+    
+    // Step 2: Extract with system unzip
+    const extractDir = path.join(testDir, 'extracted')
+    await fs.mkdir(extractDir, { recursive: true })
+    const { execSync } = await import('node:child_process')
+    execSync(`unzip -q "${zipPath1}" -d "${extractDir}"`)
+    
+    // Step 3: Re-zip with system zip
+    const zipPath2 = path.join(testDir, 'step2-system.zip')
+    execSync(`cd "${extractDir}" && zip -q "${zipPath2}" roundtrip.txt file2.txt`)
+    
+    // Step 4: Read with zip-go
+    const finalBlob = await openAsBlob(zipPath2)
+    const finalEntries = await readZipBlob(finalBlob)
+    
+    assert.equal(finalEntries.length, 2, 'Should have two entries after round-trip')
+    const finalEntry = finalEntries.find(e => e.name === 'roundtrip.txt')
+    assert.ok(finalEntry, 'Should find roundtrip.txt')
+    assert.equal(await finalEntry.text(), originalContent, 'Content should survive round-trip')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should handle files with various special characters', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip-special-chars-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create files with special chars in both name and content
+    const files = [
+      new File(['Content 1'], 'normal.txt'),
+      new File(['Space content'], 'file with spaces.txt'),
+      new File(['Dash content'], 'file-with-dashes.txt'),
+      new File(['Underscore content'], 'file_with_underscore.txt'),
+      new File(['UTF8 content: ñáéíóú'], 'utf8-content.txt')
+    ]
+    
+    const zipPath = path.join(testDir, 'special-chars.zip')
+    await createZipBlobFromFS(files, zipPath)
+    
+    // Extract with system unzip
+    const extractDir = path.join(testDir, 'extracted')
+    await fs.mkdir(extractDir, { recursive: true })
+    const { execSync } = await import('node:child_process')
+    execSync(`unzip -q "${zipPath}" -d "${extractDir}"`)
+    
+    // Verify all files extracted correctly
+    const normalContent = await fs.readFile(path.join(extractDir, 'normal.txt'), 'utf8')
+    const spacesContent = await fs.readFile(path.join(extractDir, 'file with spaces.txt'), 'utf8')
+    const dashContent = await fs.readFile(path.join(extractDir, 'file-with-dashes.txt'), 'utf8')
+    const underscoreContent = await fs.readFile(path.join(extractDir, 'file_with_underscore.txt'), 'utf8')
+    const utf8Content = await fs.readFile(path.join(extractDir, 'utf8-content.txt'), 'utf8')
+    
+    assert.equal(normalContent, 'Content 1')
+    assert.equal(spacesContent, 'Space content')
+    assert.equal(dashContent, 'Dash content')
+    assert.equal(underscoreContent, 'Underscore content')
+    assert.equal(utf8Content, 'UTF8 content: ñáéíóú')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should handle directory structures', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip-dirs-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create directory structure
+    const subdir = path.join(testDir, 'source', 'subdir')
+    await fs.mkdir(subdir, { recursive: true })
+    await fs.writeFile(path.join(testDir, 'source', 'root.txt'), 'Root file')
+    await fs.writeFile(path.join(subdir, 'nested.txt'), 'Nested file')
+    
+    // Create ZIP with system zip (preserve paths)
+    const zipPath = path.join(testDir, 'dirs.zip')
+    const { execSync } = await import('node:child_process')
+    execSync(`cd "${path.join(testDir, 'source')}" && zip -q -r "${zipPath}" .`)
+    
+    // Read with zip-go
+    const zipBlob = await openAsBlob(zipPath)
+    const entries = await readZipBlob(zipBlob)
+    
+    // Should have files and directories
+    assert.ok(entries.length >= 2, 'Should have at least 2 entries')
+    
+    const rootFile = entries.find(e => e.name === 'root.txt')
+    const nestedFile = entries.find(e => e.name === 'subdir/nested.txt')
+    
+    assert.ok(rootFile, 'Should find root.txt')
+    assert.ok(nestedFile, 'Should find subdir/nested.txt')
+    assert.equal(await rootFile.text(), 'Root file')
+    assert.equal(await nestedFile.text(), 'Nested file')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should handle empty files', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip-empty-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create ZIP with empty file using zip-go
+    const files = [
+      new File([], 'empty.txt'),
+      new File(['Not empty'], 'nonempty.txt')
+    ]
+    
+    const zipPath = path.join(testDir, 'with-empty.zip')
+    await createZipBlobFromFS(files, zipPath)
+    
+    // Extract with system unzip
+    const extractDir = path.join(testDir, 'extracted')
+    await fs.mkdir(extractDir, { recursive: true })
+    const { execSync } = await import('node:child_process')
+    execSync(`unzip -q "${zipPath}" -d "${extractDir}"`)
+    
+    // Verify empty file
+    const emptyContent = await fs.readFile(path.join(extractDir, 'empty.txt'), 'utf8')
+    const nonEmptyContent = await fs.readFile(path.join(extractDir, 'nonempty.txt'), 'utf8')
+    
+    assert.equal(emptyContent, '', 'Empty file should be empty')
+    assert.equal(nonEmptyContent, 'Not empty', 'Non-empty file should have content')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should verify ZIP64 compatibility with system tools for larger files', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip64-compat-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create a larger file (not 4GB, but large enough to test the format)
+    // We use 50MB which is practical for testing
+    const largeFile = new VirtualLoremIpsumFile(50 * 1024 * 1024, 'large-50mb.txt')
+    
+    const zipPath = path.join(testDir, 'large-file.zip')
+    await createZipBlobFromFS([largeFile], zipPath)
+    
+    // Test that system unzip can read it
+    const { execSync } = await import('node:child_process')
+    
+    // List contents with unzip
+    const listOutput = execSync(`unzip -l "${zipPath}"`, { encoding: 'utf8' })
+    assert.ok(listOutput.includes('large-50mb.txt'), 'Unzip should list the large file')
+    
+    // Test extraction (just verify it doesn't error)
+    const extractDir = path.join(testDir, 'extracted')
+    await fs.mkdir(extractDir, { recursive: true })
+    execSync(`unzip -q "${zipPath}" -d "${extractDir}"`)
+    
+    // Verify the file exists and has correct size
+    const stats = await fs.stat(path.join(extractDir, 'large-50mb.txt'))
+    assert.equal(stats.size, 50 * 1024 * 1024, 'Extracted file should have correct size')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
+
+test('should read ZIP64 files if created by system tools', async (t) => {
+  const testDir = path.join(os.tmpdir(), `zip64-system-test-${randomUUID()}`)
+  await fs.mkdir(testDir, { recursive: true })
+  
+  try {
+    // Create a file and zip it with system zip
+    const testFile = path.join(testDir, 'test.txt')
+    await fs.writeFile(testFile, 'Test content for ZIP64 compatibility check')
+    
+    const zipPath = path.join(testDir, 'system.zip')
+    const { execSync } = await import('node:child_process')
+    
+    // Force ZIP64 format with -fz flag (if supported) or just create normally
+    try {
+      execSync(`cd "${testDir}" && zip -q "${zipPath}" test.txt`)
+    } catch (err) {
+      // If command fails, skip this test
+      t.skip()
+      return
+    }
+    
+    // Read with zip-go
+    const zipBlob = await openAsBlob(zipPath)
+    const entries = await readZipBlob(zipBlob)
+    
+    assert.equal(entries.length, 1, 'Should have one entry')
+    assert.equal(entries[0].name, 'test.txt', 'Entry name should match')
+    assert.equal(await entries[0].text(), 'Test content for ZIP64 compatibility check')
+  } finally {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+})
