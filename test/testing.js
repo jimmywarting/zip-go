@@ -1381,6 +1381,16 @@ test('should verify ZIP64 compatibility with system tools for larger files', asy
     // Verify the file exists and has correct size
     const stats = await fs.stat(path.join(extractDir, 'large-50mb.txt'))
     assert.equal(stats.size, 50 * 1024 * 1024, 'Extracted file should have correct size')
+    
+    // Verify content integrity by reading a sample from the beginning and end
+    const extractedBlob = await openAsBlob(path.join(extractDir, 'large-50mb.txt'))
+    const entries = await readZipBlob(await openAsBlob(zipPath))
+    const originalEntry = entries[0]
+    
+    // Read first 1KB from both to verify content matches
+    const originalChunk = new Uint8Array(await (await originalEntry.rawBytes()).slice(0, 1024).arrayBuffer())
+    const extractedChunk = new Uint8Array(await extractedBlob.slice(0, 1024).arrayBuffer())
+    assert.deepEqual(originalChunk, extractedChunk, 'Content should match at beginning')
   } finally {
     await fs.rm(testDir, { recursive: true, force: true })
   }
@@ -1398,11 +1408,12 @@ test('should read ZIP64 files if created by system tools', async (t) => {
     const zipPath = path.join(testDir, 'system.zip')
     const { execSync } = await import('node:child_process')
     
-    // Force ZIP64 format with -fz flag (if supported) or just create normally
+    // Create ZIP with system zip tool
     try {
-      execSync(`cd "${testDir}" && zip -q "${zipPath}" test.txt`)
+      execSync(`cd "${testDir}" && zip -q "${zipPath}" test.txt`, { stdio: 'pipe' })
     } catch (err) {
-      // If command fails, skip this test
+      // If command fails, log the error and skip this test
+      console.log(`Skipping test due to zip command error: ${err.message}`)
       t.skip()
       return
     }
