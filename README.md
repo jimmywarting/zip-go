@@ -80,6 +80,43 @@ readable.pipeTo(destination)
 writer.close()
 ```
 
+## Memory-efficient ZIP creation with filesystem
+
+For very large files (especially ZIP64 files > 4GB), loading the entire ZIP into memory can be problematic. You can use the filesystem as intermediate storage:
+
+```js
+import fs from 'node:fs/promises'
+import { openAsBlob } from 'node:fs'
+import Writer from 'zip-go/lib/write.js'
+
+// Write ZIP to filesystem first, then open as Blob
+async function createZipBlobFromFS(files, destPath) {
+  // Write the ZIP stream directly to a file
+  const stream = ReadableStream.from(files).pipeThrough(new Writer())
+  await fs.writeFile(destPath, stream)
+  
+  // Open the file as a Blob (memory-efficient)
+  const blob = await openAsBlob(destPath)
+  
+  return blob
+}
+
+// Usage
+const largeFiles = [
+  new VirtualFile(5 * 1024 * 1024 * 1024, 'large-file.bin') // 5GB file
+]
+
+const zipBlob = await createZipBlobFromFS(largeFiles, '/tmp/large-archive.zip')
+
+// The blob can now be used without loading the entire ZIP into memory
+// For example, you can read it with the zip reader or serve it via HTTP
+```
+
+This approach is especially useful for:
+- Creating ZIP64 archives larger than 4GB
+- Server-side ZIP creation where memory is limited
+- Processing many large files in sequence
+
 ## Reading a zip
 
 This read method only read the central directory (end of the file)

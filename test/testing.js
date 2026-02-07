@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import { openAsBlob } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -37,7 +38,7 @@ function createZipBlob (files) {
  * @returns {Promise<{blob: Blob, path: string, cleanup: Function}>} Object containing the blob, file path, and cleanup function
  */
 async function createZipBlobFromFS (files, dest) {
-  const tempFile = dest || path.join(os.tmpdir(), `zip-go-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`)
+  const tempFile = dest || path.join(os.tmpdir(), `zip-go-${randomUUID()}.zip`)
   
   // Write the ZIP stream to a file
   const stream = ReadableStream.from(files).pipeThrough(new Writer())
