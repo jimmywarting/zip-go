@@ -142,3 +142,45 @@ for await (const entry of read(blob)) {
   const file = await entry.file()
 }
 ```
+
+## Using Entry class for generating ZIP files
+
+The `Entry` class can now be used in write mode to generate ZIP file headers and descriptors. This is useful for advanced ZIP generation scenarios or implementing custom ZIP writers.
+
+```js
+import { Entry } from 'zip-go/lib/read.js'
+import Crc32 from 'zip-go/lib/crc.js'
+import fs from 'node:fs'
+
+// Create an Entry for writing
+const blob = await fs.openAsBlob('path/to/file.txt')
+const entry = new Entry(blob)
+
+// Set entry properties
+entry.name = 'readme.md'
+entry.compressionMethod = 0 // No compression
+entry.size = blob.size
+entry.compressedSize = blob.size
+
+// Calculate and set CRC32
+const crc = new Crc32()
+const content = await blob.arrayBuffer()
+crc.append(new Uint8Array(content))
+entry.crc32 = crc.get()
+
+// Generate ZIP structures
+const localHeader = entry.generateLocalHeader() // 30+ byte header
+const dataDescriptor = entry.generateDataDescriptor() // 16 byte descriptor
+
+// For streaming scenarios where CRC is unknown at header write time:
+const entry2 = new Entry(blob)
+entry2.name = 'stream.txt'
+// Don't set crc32 - generateLocalHeader() will set the data descriptor flag
+const header = entry2.generateLocalHeader()
+// Write file data...
+// Calculate CRC and sizes...
+entry2.crc32 = calculatedCrc
+entry2.compressedSize = actualCompressedSize
+entry2.size = actualUncompressedSize
+const descriptor = entry2.generateDataDescriptor()
+```
