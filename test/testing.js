@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 
-import read from '../lib/read.js'
+import read, { Entry } from '../lib/read.js'
 import Writer from '../lib/write.js'
 import { VirtualLoremIpsumFile } from './virtual-lorem-ipsum-file.js'
 
@@ -1428,4 +1428,223 @@ test('should read ZIP64 files if created by system tools', async (t) => {
   } finally {
     await fs.rm(testDir, { recursive: true, force: true })
   }
+})
+
+// Tests for Entry class in write mode
+test('Entry should support write mode construction with File', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  
+  const entry = new Entry(file)
+  
+  assert.ok(entry, 'Entry should be created')
+  assert.equal(typeof entry.generateLocalHeader, 'function', 'Should have generateLocalHeader method')
+  assert.equal(typeof entry.generateDataDescriptor, 'function', 'Should have generateDataDescriptor method')
+})
+
+test('Entry should support write mode construction with Object', async (t) => {
+  // Entry imported at top
+  const fileLike = {
+    name: 'test.txt',
+    stream: () => new Response('test content').body
+  }
+  
+  const entry = new Entry(fileLike)
+  
+  assert.ok(entry, 'Entry should be created')
+})
+
+test('Entry write mode should allow setting properties', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  
+  const entry = new Entry(file)
+  entry.name = 'readme.md'
+  entry.crc32 = 0x12345678
+  entry.compressionMethod = 8
+  entry.compressedSize = 100
+  entry.size = 200
+  entry.lastModified = 1234567890000
+  
+  assert.equal(entry.name, 'readme.md', 'Name should be set')
+  assert.equal(entry.crc32, 0x12345678, 'CRC32 should be set')
+  assert.equal(entry.compressionMethod, 8, 'Compression method should be set')
+  assert.equal(entry.compressedSize, 100, 'Compressed size should be set')
+  assert.equal(entry.size, 200, 'Size should be set')
+  assert.equal(entry.lastModified, 1234567890000, 'Last modified should be set')
+})
+
+test('Entry generateLocalHeader should produce valid header', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  
+  const entry = new Entry(file)
+  entry.name = 'readme.md'
+  entry.crc32 = 0x12345678
+  entry.compressionMethod = 0
+  entry.compressedSize = 12
+  entry.size = 12
+  entry.lastModified = new Date('2024-01-01T12:00:00Z').getTime()
+  
+  const header = entry.generateLocalHeader()
+  
+  assert.ok(header instanceof Uint8Array, 'Header should be Uint8Array')
+  assert.ok(header.length > 30, 'Header should be at least 30 bytes')
+  
+  const dv = new DataView(header.buffer)
+  assert.equal(dv.getUint32(0, true), 0x04034b50, 'Should have local file header signature')
+  assert.equal(dv.getUint16(8, true), 0, 'Compression method should be 0')
+  assert.equal(dv.getUint32(14, true), 0x12345678, 'CRC should match')
+  assert.equal(dv.getUint32(18, true), 12, 'Compressed size should match')
+  assert.equal(dv.getUint32(22, true), 12, 'Uncompressed size should match')
+  
+  const nameLength = dv.getUint16(26, true)
+  const nameBytes = new Uint8Array(header.buffer, 30, nameLength)
+  const decoder = new TextDecoder()
+  const name = decoder.decode(nameBytes)
+  assert.equal(name, 'readme.md', 'File name should match')
+})
+
+test('Entry generateLocalHeader should use data descriptor flag when CRC is unknown', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  
+  const entry = new Entry(file)
+  entry.name = 'readme.md'
+  // Don't set CRC
+  
+  const header = entry.generateLocalHeader()
+  const dv = new DataView(header.buffer)
+  
+  // Bit 3 should be set for data descriptor
+  const bitFlag = dv.getUint16(6, true)
+  assert.equal(bitFlag & 0x0008, 0x0008, 'Data descriptor bit flag should be set')
+  assert.equal(dv.getUint32(14, true), 0, 'CRC should be 0 when using data descriptor')
+})
+
+test('Entry generateDataDescriptor should produce valid descriptor', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  
+  const entry = new Entry(file)
+  entry.crc32 = 0x12345678
+  entry.compressedSize = 100
+  entry.size = 200
+  
+  const descriptor = entry.generateDataDescriptor()
+  
+  assert.ok(descriptor instanceof Uint8Array, 'Descriptor should be Uint8Array')
+  assert.equal(descriptor.length, 16, 'Descriptor should be 16 bytes')
+  
+  const dv = new DataView(descriptor.buffer)
+  assert.equal(dv.getUint32(0, true), 0x08074b50, 'Should have data descriptor signature')
+  assert.equal(dv.getUint32(4, true), 0x12345678, 'CRC should match')
+  assert.equal(dv.getUint32(8, true), 100, 'Compressed size should match')
+  assert.equal(dv.getUint32(12, true), 200, 'Uncompressed size should match')
+})
+
+test('Entry methods should work in both read and write modes', async (t) => {
+  // Entry imported at top
+  
+  // Create a simple zip to get a read-mode Entry
+  const file = new File(['test content'], 'test.txt')
+  const zipBlob = await createZipBlob([file])
+  const entries = await readZipBlob(zipBlob)
+  const readEntry = entries[0]
+  
+  // Should be able to call generateLocalHeader on read-mode entry
+  const header = readEntry.generateLocalHeader()
+  assert.ok(header instanceof Uint8Array, 'Should generate header from read-mode entry')
+  
+  // Should be able to call generateDataDescriptor on read-mode entry
+  const descriptor = readEntry.generateDataDescriptor()
+  assert.ok(descriptor instanceof Uint8Array, 'Should generate descriptor from read-mode entry')
+  
+  // Should be able to modify and re-generate
+  readEntry.name = 'modified.txt'
+  const modifiedHeader = readEntry.generateLocalHeader()
+  assert.ok(modifiedHeader instanceof Uint8Array, 'Should generate header after modification')
+})
+
+test('Entry setters should validate types', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  const entry = new Entry(file)
+  
+  assert.throws(
+    () => { entry.crc32 = 'invalid' },
+    /crc32 must be a number/,
+    'Should throw error for invalid crc32 type'
+  )
+  
+  assert.throws(
+    () => { entry.compressionMethod = 'invalid' },
+    /compressionMethod must be a number/,
+    'Should throw error for invalid compressionMethod type'
+  )
+  
+  assert.throws(
+    () => { entry.lastModified = 'invalid' },
+    /lastModified must be a number/,
+    'Should throw error for invalid lastModified type'
+  )
+  
+  assert.throws(
+    () => { entry.name = 123 },
+    /name must be a string/,
+    'Should throw error for invalid name type'
+  )
+  
+  assert.throws(
+    () => { entry.size = 'invalid' },
+    /size must be a number or bigint/,
+    'Should throw error for invalid size type'
+  )
+  
+  assert.throws(
+    () => { entry.compressedSize = 'invalid' },
+    /compressedSize must be a number or bigint/,
+    'Should throw error for invalid compressedSize type'
+  )
+})
+
+test('Entry should support BigInt for sizes', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  const entry = new Entry(file)
+  
+  // Test with BigInt
+  entry.compressedSize = BigInt(5000000000) // 5GB
+  entry.size = BigInt(6000000000) // 6GB
+  
+  // Should be converted to number
+  assert.equal(typeof entry.compressedSize, 'number', 'Compressed size should be a number')
+  assert.equal(typeof entry.size, 'number', 'Size should be a number')
+})
+
+test('Entry generateDataDescriptor should support ZIP64 format', async (t) => {
+  // Entry imported at top
+  const file = new File(['test content'], 'test.txt')
+  const entry = new Entry(file)
+  
+  // Test with regular sizes (non-ZIP64)
+  entry.crc32 = 0x12345678
+  entry.compressedSize = 1000
+  entry.size = 2000
+  
+  const descriptor = entry.generateDataDescriptor()
+  assert.equal(descriptor.length, 16, 'Regular descriptor should be 16 bytes')
+  
+  // Test with ZIP64 sizes
+  entry.compressedSize = BigInt(5000000000) // 5GB
+  entry.size = BigInt(6000000000) // 6GB
+  
+  const descriptor64 = entry.generateDataDescriptor()
+  assert.equal(descriptor64.length, 24, 'ZIP64 descriptor should be 24 bytes')
+  
+  const dv = new DataView(descriptor64.buffer)
+  assert.equal(dv.getUint32(0, true), 0x08074b50, 'Should have data descriptor signature')
+  assert.equal(dv.getUint32(4, true), 0x12345678, 'CRC should match')
+  assert.equal(dv.getBigUint64(8, true), BigInt(5000000000), 'ZIP64 compressed size should match')
+  assert.equal(dv.getBigUint64(16, true), BigInt(6000000000), 'ZIP64 uncompressed size should match')
 })
