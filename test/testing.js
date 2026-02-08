@@ -1593,6 +1593,18 @@ test('Entry setters should validate types', async (t) => {
     /name must be a string/,
     'Should throw error for invalid name type'
   )
+  
+  assert.throws(
+    () => { entry.size = 'invalid' },
+    /size must be a number or bigint/,
+    'Should throw error for invalid size type'
+  )
+  
+  assert.throws(
+    () => { entry.compressedSize = 'invalid' },
+    /compressedSize must be a number or bigint/,
+    'Should throw error for invalid compressedSize type'
+  )
 })
 
 test('Entry should support BigInt for sizes', async (t) => {
